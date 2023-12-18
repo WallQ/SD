@@ -1,0 +1,16 @@
+[
+  {
+    "id": "12b2da16-611b-43c4-9844-d1b33639680c",
+    "name": "Sergio Felix",
+    "email": "8200615@estg.ipp.pt",
+    "password": "12345",
+    "role": "Recruit"
+  },
+  {
+    "id": "905eaf38-5705-4e57-a93c-248b1d90682e",
+    "name": "Carlos Leite",
+    "email": "8200377@estg.ipp.pt",
+    "password": "54321",
+    "role": "Recruit"
+  }
+]
