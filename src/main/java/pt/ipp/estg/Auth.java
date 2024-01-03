@@ -9,22 +9,48 @@ import java.util.Scanner;
 import java.util.UUID;
 
 public class Auth {
-    public static void AuthMenu() {
+    private User user;
+    private static final Scanner scanner = new Scanner(System.in);
+
+    public Auth() {
+    }
+
+    private void displayMenu() {
         System.out.println("[Auth Menu]");
         System.out.println("1 - Sign Up");
         System.out.println("2 - Sign In");
         System.out.println("0 - Exit");
     }
 
-    public static User signUp() {
-        ArrayList<User> users;
+    public void handleAuth() {
+        int option;
 
-        users = JSON.loadUsers();
+        do {
+            displayMenu();
 
-        Scanner scanner = new Scanner(System.in);
+            System.out.println("Choose an option: ");
+            option = scanner.nextInt();
 
-        System.out.println("Name: ");
-        String name = scanner.nextLine();
+            switch (option) {
+                case 1:
+                    this.user = signUp();
+                    break;
+                case 2:
+                    this.user = signIn();
+                    break;
+                case 0:
+                    System.out.println("Exiting...");
+                default:
+                    System.out.println("Invalid option. Please try again!");
+                    break;
+            }
+        } while (option != 0);
+
+    }
+
+    private User signUp() {
+        System.out.println("Username: ");
+        String username = scanner.nextLine();
 
         System.out.println("Email: ");
         String email = scanner.nextLine();
@@ -41,7 +67,9 @@ public class Auth {
             return null;
         }
 
-        User user = new User(UUID.randomUUID(), name, email, password, Role.valueOf(role));
+        User user = new User(UUID.randomUUID(), username, email, password, Role.valueOf(role));
+
+        ArrayList<User> users = JSON.loadUsers();
 
         if (!users.isEmpty()) {
             for (User currentUser : users) {
@@ -59,18 +87,14 @@ public class Auth {
         return user;
     }
 
-    public static User signIn() {
-        ArrayList<User> users;
-
-        users = JSON.loadUsers();
-
-        Scanner scanner = new Scanner(System.in);
-
+    private User signIn() {
         System.out.println("Email: ");
         String email = scanner.nextLine();
 
         System.out.println("Password: ");
         String password = scanner.nextLine();
+
+        ArrayList<User> users = JSON.loadUsers();
 
         if (users.isEmpty()) {
             System.out.println("Account not found!");
@@ -78,21 +102,27 @@ public class Auth {
         }
 
         for (User currentUser : users) {
-            if (!currentUser.getEmail().equals(email)) {
-                System.out.println("Email not found!");
-                return null;
+            if (currentUser.getEmail().equals(email)) {
+                if (!currentUser.getPassword().equals(password)) {
+                    System.out.println("Password incorrect!");
+                    return null;
+                }
+                System.out.println(currentUser.getUsername() + " successfully signed in!");
+
+                return currentUser;
             }
-
-            if (!currentUser.getPassword().equals(password)) {
-                System.out.println("Password incorrect!");
-                return null;
-            }
-
-            System.out.println(currentUser.getName() + " successfully signed in!");
-
-            return currentUser;
         }
 
+        System.out.println("Email not found!");
+
         return null;
+    }
+
+    public User getUser() {
+        return user;
+    }
+
+    public void setUser(User user) {
+        this.user = user;
     }
 }
