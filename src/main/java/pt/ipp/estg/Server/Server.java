@@ -2,21 +2,20 @@ package pt.ipp.estg.Server;
 
 import pt.ipp.estg.Entities.User;
 import pt.ipp.estg.Enums.Role;
-import pt.ipp.estg.Utils.JSON;
 
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
 import java.util.Date;
-import java.util.UUID;
+import java.util.HashMap;
+import java.util.Map;
 
 public class Server {
     private static final int SERVER_PORT = 1024;
     protected ServerSocket serverSocket;
-    protected static final ArrayList<ClientHandler> clients = new ArrayList<>();
+    protected static final Map<ClientHandler, User> users = new HashMap<>();
 
     public Server(ServerSocket serverSocket) {
         this.serverSocket = serverSocket;
@@ -34,47 +33,15 @@ public class Server {
         try {
             while (!serverSocket.isClosed()) {
                 Socket clientSocket = serverSocket.accept();
-                System.out.printf("[%s] NEW CONNECTION -> %s%n", getCurrentTime(), getClientAddress(clientSocket));
+                System.out.printf("[%s %s] New connection!%n", getCurrentTime(), getClientAddress(clientSocket));
                 ClientHandler handler = new ClientHandler(clientSocket);
-                clients.add(handler);
+                users.put(handler, null);
                 new Thread(handler).start();
             }
         } catch (Exception e) {
             System.err.println("An unexpected error has occurred during server initialization!\n" + e.getMessage());
             System.exit(1);
         }
-    }
-
-    private static User handleSignUp(String username, String email, String password, String role) {
-        ArrayList<User> users = JSON.loadUsers();
-
-        User user = new User(UUID.randomUUID(), username, email, password, Role.valueOf(role));
-
-        if (!users.isEmpty()) {
-            for (User currentUser : users) {
-                if (currentUser.getEmail().equals(user.getEmail())) {
-                    return null;
-                }
-            }
-        }
-
-        JSON.saveUser(user);
-
-        return user;
-    }
-
-    private static User handleSignIn(String email, String password) {
-        ArrayList<User> users = JSON.loadUsers();
-
-        if (users.isEmpty()) return null;
-
-        for (User currentUser : users) {
-            if (currentUser.getEmail().equals(email) && currentUser.getPassword().equals(password)) {
-                return currentUser;
-            }
-        }
-
-        return null;
     }
 
     public static void main(String[] args) {
@@ -96,12 +63,14 @@ public class Server {
         private final Socket socket;
         private BufferedWriter bufferedWriter;
         private BufferedReader bufferedReader;
+        private User user;
 
         public ClientHandler(Socket socket) {
             this.socket = socket;
             try {
                 this.bufferedWriter = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
                 this.bufferedReader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+                this.user = null;
             } catch (Exception e) {
                 handleException("An unexpected error has occurred during client initialization!", e);
             }
@@ -123,59 +92,60 @@ public class Server {
         @Override
         public void run() {
             try {
-                boolean isAuthenticated = false;
-                User user = null;
-
-                while (!isAuthenticated) {
-                    sendMessageToClient("[Auth Menu]");
-                    sendMessageToClient("1 - Sign Up");
-                    sendMessageToClient("2 - Sign In");
-
-                    String option = bufferedReader.readLine();
-                    String email;
-                    String password;
-
-                    switch (option) {
-                        case "1":
-                            sendMessageToClient("Username: ");
-                            String username = bufferedReader.readLine();
-                            sendMessageToClient("Email: ");
-                            email = bufferedReader.readLine();
-                            sendMessageToClient("Password: ");
-                            password = bufferedReader.readLine();
-                            sendMessageToClient("Available Roles: [Private], [Sergeant], [Lieutenant], [General]");
-                            String role = bufferedReader.readLine();
-                            user = handleSignUp(username, email, password, role);
-                            break;
-                        case "2":
-                            sendMessageToClient("Email: ");
-                            email = bufferedReader.readLine();
-                            sendMessageToClient("Password: ");
-                            password = bufferedReader.readLine();
-                            user = handleSignIn(email, password);
-                            break;
-                        default:
-                            sendMessageToClient("Invalid option. Please try again!");
-                            break;
-                    }
-
-                    if (user != null) {
-                        isAuthenticated = true;
-                        System.out.printf("[%s %s] %s[%s] connected!%n", getCurrentTime(), getClientAddress(socket), user.getUsername(), user.getRole());
-                        broadcastMessage("[SERVER] " + user.getUsername() + "[" + user.getRole() + "] connected!");
-                    } else {
-                        sendMessageToClient("Authentication failed. Please try again!");
-                    }
-                }
-                String clientMessage;
-                while ((clientMessage = bufferedReader.readLine()) != null) {
-                    System.out.printf("[%s %s] %s[%s]: %s%n", getCurrentTime(), getClientAddress(socket), user.getUsername(), user.getRole(), clientMessage);
-                    broadcastMessage(user.getUsername() + "[" + user.getRole() + "]: " + clientMessage);
-                }
+                authenticateUser();
+//                String clientMessage;
+//                while ((clientMessage = bufferedReader.readLine()) != null) {
+//                    System.out.printf("[%s %s] [%s]%s: %s%n", getCurrentTime(), getClientAddress(socket), user.getUsername(), user.getRole(), clientMessage);
+//                    broadcastMessage(user.getUsername() + "[" + user.getRole() + "]: " + clientMessage);
+//                }
             } catch (Exception e) {
-                System.out.printf("[%s %s] Client disconnected!%n", getCurrentTime(), getClientAddress(socket));
+                System.out.printf("[%s %s] Lost connection!%n", getCurrentTime(), getClientAddress(this.socket));
             } finally {
                 close();
+            }
+        }
+
+        private void authenticateUser() throws IOException {
+            boolean isAuthenticated = false;
+
+            while (!isAuthenticated) {
+                sendMessageToClient("[Authentication Commands]\n/sign-up {username} {email} {password} {role (Private, Sergeant, Lieutenant, General)}\n/sign-in {email} {password}");
+
+                String command = this.bufferedReader.readLine();
+
+                if (command.startsWith("/sign-up")) {
+                    String[] commandArgs = command.split("\\s+", 5);
+                    if (commandArgs.length != 5) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
+                    if (!commandArgs[4].equals("Private") && !commandArgs[4].equals("Sergeant") && !commandArgs[4].equals("Lieutenant") && !commandArgs[4].equals("General")) {
+                        sendMessageToClient("Invalid role. Please try again!");
+                        continue;
+                    }
+                    this.user = Auth.signUp(commandArgs[1], commandArgs[2], commandArgs[3], commandArgs[4]);
+                } else if (command.startsWith("/sign-in")) {
+                    String[] commandArgs = command.split("\\s+", 3);
+                    if (commandArgs.length != 3) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
+                    this.user = Auth.signIn(commandArgs[1], commandArgs[2]);
+                } else {
+                    sendMessageToClient("Invalid command. Please try again!");
+                    continue;
+                }
+
+                if (this.user != null) {
+                    synchronized (users) {
+                        users.put(this, this.user);
+                    }
+                    isAuthenticated = true;
+                    System.out.printf("[%s %s] [%s] %s connected!%n", getCurrentTime(), getClientAddress(this.socket), this.user.getRole(), this.user.getUsername());
+                    broadcastMessage("[SERVER] [" + this.user.getRole() + "] " + this.user.getUsername() + " connected!");
+                } else {
+                    sendMessageToClient("Authentication failed. Please try again!");
+                }
             }
         }
 
@@ -189,17 +159,41 @@ public class Server {
             }
         }
 
+        private void sendMessage(String message, Map.Entry<ClientHandler, User> set) {
+            try {
+                set.getKey().bufferedWriter.write("[%s %s] [%s] %s: %s%n".formatted(getCurrentTime(), getClientAddress(this.socket), this.user.getUsername(), this.user.getRole(), message));
+                set.getKey().bufferedWriter.newLine();
+                set.getKey().bufferedWriter.flush();
+            } catch (Exception e) {
+                handleException("An unexpected error has occurred during broadcasting message!", e);
+            }
+        }
+
+        private void unicastMessage(String username, String message) {
+            synchronized (users) {
+                for (Map.Entry<ClientHandler, User> set : users.entrySet()) {
+                    if (set.getValue().getUsername().equals(username)) {
+                        sendMessage(message, set);
+                    }
+                }
+            }
+        }
+
+        private void multicastMessage(Role role, String message) {
+            synchronized (users) {
+                for (Map.Entry<ClientHandler, User> set : users.entrySet()) {
+                    if (set.getValue().getRole().equals(role)) {
+                        sendMessage(message, set);
+                    }
+                }
+            }
+        }
+
         private void broadcastMessage(String message) {
-            synchronized (clients) {
-                for (ClientHandler client : clients) {
-                    try {
-                        if (client != this) {
-                            client.bufferedWriter.write(message);
-                            client.bufferedWriter.newLine();
-                            client.bufferedWriter.flush();
-                        }
-                    } catch (Exception e) {
-                        handleException("An unexpected error has occurred during broadcasting message!", e);
+            synchronized (users) {
+                for (Map.Entry<ClientHandler, User> set : users.entrySet()) {
+                    if (set.getKey() != this) {
+                        sendMessage(message, set);
                     }
                 }
             }
@@ -210,7 +204,7 @@ public class Server {
                 if (socket != null) socket.close();
                 if (bufferedWriter != null) bufferedWriter.close();
                 if (bufferedReader != null) bufferedReader.close();
-                clients.remove(this);
+                users.remove(this);
                 broadcastMessage("[SERVER] Client disconnected!");
             } catch (IOException e) {
                 handleException("Couldn't close buffered writer buffered reader & socket!", e);
