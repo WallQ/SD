@@ -1,5 +1,6 @@
 package pt.ipp.estg.Server;
 
+import pt.ipp.estg.Entities.Chatroom;
 import pt.ipp.estg.Entities.User;
 import pt.ipp.estg.Enums.Role;
 
@@ -8,14 +9,13 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 public class Server {
     private static final int SERVER_PORT = 1024;
     protected ServerSocket serverSocket;
-    protected static final Map<ClientHandler, User> users = new HashMap<>();
+    protected static final Map<ClientHandler, User> clients = new HashMap<>();
+    protected static final List<Chatroom> rooms = new ArrayList<>();
 
     public Server(ServerSocket serverSocket) {
         this.serverSocket = serverSocket;
@@ -35,7 +35,7 @@ public class Server {
                 Socket clientSocket = serverSocket.accept();
                 System.out.printf("[%s %s] New connection!%n", getCurrentTime(), getClientAddress(clientSocket));
                 ClientHandler handler = new ClientHandler(clientSocket);
-                users.put(handler, null);
+                clients.put(handler, null);
                 new Thread(handler).start();
             }
         } catch (Exception e) {
@@ -93,11 +93,7 @@ public class Server {
         public void run() {
             try {
                 authenticateUser();
-//                String clientMessage;
-//                while ((clientMessage = bufferedReader.readLine()) != null) {
-//                    System.out.printf("[%s %s] [%s]%s: %s%n", getCurrentTime(), getClientAddress(socket), user.getUsername(), user.getRole(), clientMessage);
-//                    broadcastMessage(user.getUsername() + "[" + user.getRole() + "]: " + clientMessage);
-//                }
+                handleAction();
             } catch (Exception e) {
                 System.out.printf("[%s %s] Lost connection!%n", getCurrentTime(), getClientAddress(this.socket));
             } finally {
@@ -109,27 +105,22 @@ public class Server {
             boolean isAuthenticated = false;
 
             while (!isAuthenticated) {
-                sendMessageToClient("[Authentication Commands]\n/sign-up {username} {email} {password} {role (Private, Sergeant, Lieutenant, General)}\n/sign-in {email} {password}");
+                sendMessageToClient(CommandsMenu.AuthenticationCommands());
 
                 String command = this.bufferedReader.readLine();
 
                 if (command.startsWith("/sign-up")) {
                     String[] commandArgs = command.split("\\s+", 5);
-                    if (commandArgs.length != 5) {
-                        sendMessageToClient("Invalid command. Please try again!");
-                        continue;
-                    }
-                    if (!commandArgs[4].equals("Private") && !commandArgs[4].equals("Sergeant") && !commandArgs[4].equals("Lieutenant") && !commandArgs[4].equals("General")) {
-                        sendMessageToClient("Invalid role. Please try again!");
-                        continue;
-                    }
+
+                    if (isInvalidCommand(commandArgs.length, 5)) return;
+                    if (isInvalidRole(commandArgs[4])) return;
+
                     this.user = Auth.signUp(commandArgs[1], commandArgs[2], commandArgs[3], commandArgs[4]);
                 } else if (command.startsWith("/sign-in")) {
                     String[] commandArgs = command.split("\\s+", 3);
-                    if (commandArgs.length != 3) {
-                        sendMessageToClient("Invalid command. Please try again!");
-                        continue;
-                    }
+
+                    if (isInvalidCommand(commandArgs.length, 3)) return;
+
                     this.user = Auth.signIn(commandArgs[1], commandArgs[2]);
                 } else {
                     sendMessageToClient("Invalid command. Please try again!");
@@ -137,16 +128,86 @@ public class Server {
                 }
 
                 if (this.user != null) {
-                    synchronized (users) {
-                        users.put(this, this.user);
+                    synchronized (clients) {
+                        clients.put(this, this.user);
                     }
                     isAuthenticated = true;
-                    System.out.printf("[%s %s] [%s] %s connected!%n", getCurrentTime(), getClientAddress(this.socket), this.user.getRole(), this.user.getUsername());
-                    broadcastMessage("[SERVER] [" + this.user.getRole() + "] " + this.user.getUsername() + " connected!");
+                    System.out.printf("[%s %s] (%s)%s connected!%n", getCurrentTime(), getClientAddress(this.socket), this.user.getRole(), this.user.getUsername());
                 } else {
                     sendMessageToClient("Authentication failed. Please try again!");
                 }
             }
+        }
+
+        private void handleAction() throws IOException {
+            String command;
+
+            sendMessageToClient(CommandsMenu.MessageCommands());
+
+            while ((command = bufferedReader.readLine()) != null) {
+                sendMessageToClient(CommandsMenu.MessageCommands());
+
+                if (command.startsWith("/whisper")) {
+                    String[] commandArgs = command.split("\\s+", 3);
+
+                    if (isInvalidCommand(commandArgs.length, 3)) return;
+
+                    unicastMessage(commandArgs[1], commandArgs[2]);
+                } else if (command.startsWith("/say")) {
+                    String[] commandArgs = command.split("\\s+", 3);
+
+                    if (isInvalidCommand(commandArgs.length, 3)) return;
+                    if (isInvalidRole(commandArgs[1])) return;
+
+                    multicastMessage(Role.valueOf(commandArgs[1]), commandArgs[2]);
+                } else if (command.startsWith("/all")) {
+                    String[] commandArgs = command.split("\\s+", 2);
+
+                    if (isInvalidCommand(commandArgs.length, 2)) return;
+
+                    broadcastMessage(commandArgs[1]);
+                } else if (command.startsWith("/create-room")) {
+                    String[] commandArgs = command.split("\\s+", 2);
+
+                    if (isInvalidCommand(commandArgs.length, 2)) return;
+
+                    synchronized (rooms) {
+                        rooms.add(new Chatroom(commandArgs[1]));
+                    }
+                } else if (command.startsWith("/join-room")) {
+                    String[] commandArgs = command.split("\\s+", 2);
+
+                    if (isInvalidCommand(commandArgs.length, 2)) return;
+
+                    synchronized (rooms) {
+                        for (Chatroom room : rooms) {
+                            if (room.getName().equals(commandArgs[1])) {
+                                room.addUser(this.user);
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    sendMessageToClient("Invalid command. Please try again!");
+                    return;
+                }
+            }
+        }
+
+        private boolean isInvalidRole(String role) {
+            if (!Role.Private.name().equals(role) && !Role.Sergeant.name().equals(role) && !Role.Lieutenant.name().equals(role) && !Role.General.name().equals(role)) {
+                sendMessageToClient("Invalid role. Please try again!");
+                return true;
+            }
+            return false;
+        }
+
+        private boolean isInvalidCommand(int commandArgsLength, int maxArgsLength) {
+            if (commandArgsLength != maxArgsLength) {
+                sendMessageToClient("Invalid command. Please try again!");
+                return true;
+            }
+            return false;
         }
 
         private void sendMessageToClient(String message) {
@@ -159,41 +220,49 @@ public class Server {
             }
         }
 
-        private void sendMessage(String message, Map.Entry<ClientHandler, User> set) {
-            try {
-                set.getKey().bufferedWriter.write("[%s %s] [%s] %s: %s%n".formatted(getCurrentTime(), getClientAddress(this.socket), this.user.getUsername(), this.user.getRole(), message));
-                set.getKey().bufferedWriter.newLine();
-                set.getKey().bufferedWriter.flush();
-            } catch (Exception e) {
-                handleException("An unexpected error has occurred during broadcasting message!", e);
-            }
-        }
-
         private void unicastMessage(String username, String message) {
-            synchronized (users) {
-                for (Map.Entry<ClientHandler, User> set : users.entrySet()) {
+            synchronized (clients) {
+                for (Map.Entry<ClientHandler, User> set : clients.entrySet()) {
                     if (set.getValue().getUsername().equals(username)) {
-                        sendMessage(message, set);
+                        try {
+                            set.getKey().bufferedWriter.write("[%s] [Say] (%s)%s: %s%n".formatted(getCurrentTime(), this.user.getRole(), this.user.getUsername(), message));
+                            set.getKey().bufferedWriter.newLine();
+                            set.getKey().bufferedWriter.flush();
+                        } catch (Exception e) {
+                            handleException("An unexpected error has occurred during broadcasting message!", e);
+                        }
                     }
                 }
             }
         }
 
         private void multicastMessage(Role role, String message) {
-            synchronized (users) {
-                for (Map.Entry<ClientHandler, User> set : users.entrySet()) {
+            synchronized (clients) {
+                for (Map.Entry<ClientHandler, User> set : clients.entrySet()) {
                     if (set.getValue().getRole().equals(role)) {
-                        sendMessage(message, set);
+                        try {
+                            set.getKey().bufferedWriter.write("[%s] [Rank] (%s)%s: %s%n".formatted(getCurrentTime(), this.user.getRole(), this.user.getUsername(), message));
+                            set.getKey().bufferedWriter.newLine();
+                            set.getKey().bufferedWriter.flush();
+                        } catch (Exception e) {
+                            handleException("An unexpected error has occurred during broadcasting message!", e);
+                        }
                     }
                 }
             }
         }
 
         private void broadcastMessage(String message) {
-            synchronized (users) {
-                for (Map.Entry<ClientHandler, User> set : users.entrySet()) {
+            synchronized (clients) {
+                for (Map.Entry<ClientHandler, User> set : clients.entrySet()) {
                     if (set.getKey() != this) {
-                        sendMessage(message, set);
+                        try {
+                            set.getKey().bufferedWriter.write("[%s] [All] (%s)%s: %s%n".formatted(getCurrentTime(), this.user.getRole(), this.user.getUsername(), message));
+                            set.getKey().bufferedWriter.newLine();
+                            set.getKey().bufferedWriter.flush();
+                        } catch (Exception e) {
+                            handleException("An unexpected error has occurred during broadcasting message!", e);
+                        }
                     }
                 }
             }
@@ -204,8 +273,9 @@ public class Server {
                 if (socket != null) socket.close();
                 if (bufferedWriter != null) bufferedWriter.close();
                 if (bufferedReader != null) bufferedReader.close();
-                users.remove(this);
-                broadcastMessage("[SERVER] Client disconnected!");
+                synchronized (clients) {
+                    clients.remove(this);
+                }
             } catch (IOException e) {
                 handleException("Couldn't close buffered writer buffered reader & socket!", e);
             } catch (Exception e) {
