@@ -16,8 +16,29 @@ public class CommandsMenu {
                 /whisper {username} {message}
                 /say {role} {message}
                 /all {message}
+                /room {room name} {message}
                 /create-room {room name}
                 /join-room {room name}
+                /leave-room {room name}
+                /list-rooms
+                """;
+    }
+
+    public static String OffensiveCommands() {
+        return """
+                [Offensive Commands]
+                /launch-missile {location} {reason}
+                """;
+    }
+
+    public static String ManagementCommands() {
+        return """
+                [Management Commands]
+                /list-requests
+                /accept-request {id}
+                /reject-request {id}
+                /promote {username} {role (Private, Sergeant, Lieutenant, General)}
+                /demote {username} {role (Private, Sergeant, Lieutenant, General)}
                 """;
     }
 }

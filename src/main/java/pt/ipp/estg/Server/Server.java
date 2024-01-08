@@ -1,6 +1,6 @@
 package pt.ipp.estg.Server;
 
-import pt.ipp.estg.Entities.Chatroom;
+import pt.ipp.estg.Entities.Request;
 import pt.ipp.estg.Entities.User;
 import pt.ipp.estg.Enums.Role;
 
@@ -14,8 +14,12 @@ import java.util.*;
 public class Server {
     private static final int SERVER_PORT = 1024;
     protected ServerSocket serverSocket;
+    protected static final Map<String, List<ClientHandler>> rooms = new HashMap<>();
     protected static final Map<ClientHandler, User> clients = new HashMap<>();
-    protected static final List<Chatroom> rooms = new ArrayList<>();
+    protected static final Map<UUID, Request> requests = new HashMap<>();
+    private static final Object lock = new Object();
+    protected static int requestsAccepted = 0, requestsRejected = 0;
+    private Timer activeMembersTimer, requestsTimer;
 
     public Server(ServerSocket serverSocket) {
         this.serverSocket = serverSocket;
@@ -31,6 +35,12 @@ public class Server {
 
     private void start() {
         try {
+            this.activeMembersTimer = new Timer(true);
+            this.activeMembersTimer.scheduleAtFixedRate(new ActiveMembersTask(), 0, 150000);
+
+            this.requestsTimer = new Timer(true);
+            this.requestsTimer.scheduleAtFixedRate(new RequestsTask(), 0, 300000);
+
             while (!serverSocket.isClosed()) {
                 Socket clientSocket = serverSocket.accept();
                 System.out.printf("[%s %s] New connection!%n", getCurrentTime(), getClientAddress(clientSocket));
@@ -41,6 +51,13 @@ public class Server {
         } catch (Exception e) {
             System.err.println("An unexpected error has occurred during server initialization!\n" + e.getMessage());
             System.exit(1);
+        } finally {
+            if (this.activeMembersTimer != null) {
+                this.activeMembersTimer.cancel();
+            }
+            if (this.requestsTimer != null) {
+                this.requestsTimer.cancel();
+            }
         }
     }
 
@@ -143,71 +160,277 @@ public class Server {
             String command;
 
             sendMessageToClient(CommandsMenu.MessageCommands());
+            sendMessageToClient(CommandsMenu.OffensiveCommands());
+            sendMessageToClient(CommandsMenu.ManagementCommands());
 
             while ((command = bufferedReader.readLine()) != null) {
                 sendMessageToClient(CommandsMenu.MessageCommands());
+                sendMessageToClient(CommandsMenu.OffensiveCommands());
+                sendMessageToClient(CommandsMenu.ManagementCommands());
 
                 if (command.startsWith("/whisper")) {
                     String[] commandArgs = command.split("\\s+", 3);
 
-                    if (isInvalidCommand(commandArgs.length, 3)) return;
+                    if (isInvalidCommand(commandArgs.length, 3)) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
 
                     unicastMessage(commandArgs[1], commandArgs[2]);
                 } else if (command.startsWith("/say")) {
                     String[] commandArgs = command.split("\\s+", 3);
 
-                    if (isInvalidCommand(commandArgs.length, 3)) return;
-                    if (isInvalidRole(commandArgs[1])) return;
+                    if (isInvalidCommand(commandArgs.length, 3)) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
+
+                    if (isInvalidRole(commandArgs[1])) {
+                        sendMessageToClient("Invalid role. Please try again!");
+                        continue;
+                    }
 
                     multicastMessage(Role.valueOf(commandArgs[1]), commandArgs[2]);
                 } else if (command.startsWith("/all")) {
                     String[] commandArgs = command.split("\\s+", 2);
 
-                    if (isInvalidCommand(commandArgs.length, 2)) return;
+                    if (isInvalidCommand(commandArgs.length, 2)) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
 
                     broadcastMessage(commandArgs[1]);
+                } else if (command.startsWith("/room")) {
+                    String[] commandArgs = command.split("\\s+", 3);
+
+                    if (isInvalidCommand(commandArgs.length, 3)) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
+
+                    broadcastMessageRoom(commandArgs[1], commandArgs[2]);
                 } else if (command.startsWith("/create-room")) {
                     String[] commandArgs = command.split("\\s+", 2);
 
-                    if (isInvalidCommand(commandArgs.length, 2)) return;
+                    if (isInvalidCommand(commandArgs.length, 2)) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
 
                     synchronized (rooms) {
-                        rooms.add(new Chatroom(commandArgs[1]));
+                        if (!rooms.containsKey(commandArgs[1])) {
+                            rooms.put(commandArgs[1], new ArrayList<>());
+                            rooms.get(commandArgs[1]).add(this);
+                        } else {
+                            sendMessageToClient("The room name already exists. Please try again!");
+                        }
                     }
                 } else if (command.startsWith("/join-room")) {
                     String[] commandArgs = command.split("\\s+", 2);
 
-                    if (isInvalidCommand(commandArgs.length, 2)) return;
+                    if (isInvalidCommand(commandArgs.length, 2)) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
 
                     synchronized (rooms) {
-                        for (Chatroom room : rooms) {
-                            if (room.getName().equals(commandArgs[1])) {
-                                room.addUser(this.user);
-                                break;
+                        if (rooms.containsKey(commandArgs[1])) {
+                            rooms.get(commandArgs[1]).add(this);
+                        } else {
+                            sendMessageToClient("The room doesn't exist. Please try again!");
+                        }
+                    }
+                } else if (command.startsWith("/leave-room")) {
+                    String[] commandArgs = command.split("\\s+", 2);
+
+                    if (isInvalidCommand(commandArgs.length, 2)) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
+
+                    synchronized (rooms) {
+                        if (rooms.containsKey(commandArgs[1])) {
+                            rooms.get(commandArgs[1]).remove(this);
+                        } else {
+                            sendMessageToClient("The room doesn't exist. Please try again!");
+                        }
+                    }
+                } else if (command.startsWith("/list-room")) {
+                    String[] commandArgs = command.split("\\s+", 1);
+
+                    if (isInvalidCommand(commandArgs.length, 1)) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
+
+                    synchronized (rooms) {
+                        for (Map.Entry<String, List<ClientHandler>> set : rooms.entrySet()) {
+                            sendMessageToClient("[Available Rooms]\nRoom: " + set.getKey() + "\nUsers: " + set.getValue().size());
+                        }
+                    }
+                } else if (command.startsWith("/launch-missile")) {
+                    String[] commandArgs = command.split("\\s+", 3);
+
+                    if (isInvalidCommand(commandArgs.length, 3)) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
+
+                    if (this.user.getRole().equals(Role.Private)) {
+                        synchronized (requests) {
+                            requests.put(UUID.randomUUID(), new Request(this.user, commandArgs[1], commandArgs[2], Role.Sergeant));
+                            multicastMessage(Role.Sergeant, "I've sent you a request for a new missile launch to " + commandArgs[1] + " with reason: " + commandArgs[2]);
+                        }
+                    } else if (this.user.getRole().equals(Role.Sergeant)) {
+                        synchronized (requests) {
+                            requests.put(UUID.randomUUID(), new Request(this.user, commandArgs[1], commandArgs[2], Role.Lieutenant));
+                            multicastMessage(Role.Lieutenant, "I've sent you a request for a new missile launch to " + commandArgs[1] + " with reason: " + commandArgs[2]);
+                        }
+                    } else if (this.user.getRole().equals(Role.Lieutenant)) {
+                        synchronized (requests) {
+                            requests.put(UUID.randomUUID(), new Request(this.user, commandArgs[1], commandArgs[2], Role.General));
+                            multicastMessage(Role.General, "I've sent you a request for a new missile launch to " + commandArgs[1] + " with reason: " + commandArgs[2]);
+                        }
+                    } else if (this.user.getRole().equals(Role.General)) {
+                        broadcastMessage("Missile launched to " + commandArgs[1] + " with reason: " + commandArgs[2]);
+                    }
+                } else if (command.startsWith("/list-requests")) {
+                    String[] commandArgs = command.split("\\s+", 1);
+
+                    if (isInvalidCommand(commandArgs.length, 1)) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
+
+                    if (this.user.getRole().equals(Role.Private)) {
+                        sendMessageToClient("You don't have permission to list requests. Please try again!");
+                        continue;
+                    }
+
+                    synchronized (requests) {
+                        for (Map.Entry<UUID, Request> set : requests.entrySet()) {
+                            if (Objects.equals(set.getValue().getApproval(), this.user.getRole()) || this.user.getRole().equals(Role.General)) {
+                                sendMessageToClient("[Available Requests]\nID: " + set.getKey() + "\nUser: " + set.getValue().getUser().getUsername() + "\nLocation: " + set.getValue().getLocation() + "\nReason: " + set.getValue().getReason());
+                            }
+                        }
+                    }
+                } else if (command.startsWith("/accept-request")) {
+                    String[] commandArgs = command.split("\\s+", 2);
+
+                    if (isInvalidCommand(commandArgs.length, 2)) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
+
+                    if (this.user.getRole().equals(Role.Private)) {
+                        sendMessageToClient("You don't have permission to accept requests. Please try again!");
+                        continue;
+                    }
+
+                    synchronized (requests) {
+                        for (Map.Entry<UUID, Request> set : requests.entrySet()) {
+                            if (set.getKey().toString().equals(commandArgs[1])) {
+                                if (set.getValue().getApproval().equals(this.user.getRole()) || this.user.getRole().equals(Role.General)) {
+                                    synchronized (lock) {
+                                        requestsAccepted++;
+                                    }
+                                    unicastMessage(set.getValue().getUser().getUsername(), "Your missile launch request to " + set.getValue().getLocation() + " with reason: " + set.getValue().getReason() + " has been accepted!");
+                                    broadcastMessage("Missile by " + set.getValue().getUser().getUsername() + " launched to " + set.getValue().getLocation() + " with reason: " + set.getValue().getReason());
+                                } else {
+                                    sendMessageToClient("You don't have permission to accept this request. Please try again!");
+                                }
+                            }
+                        }
+                    }
+                } else if (command.startsWith("/reject-request")) {
+                    String[] commandArgs = command.split("\\s+", 2);
+
+                    if (isInvalidCommand(commandArgs.length, 2)) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
+
+                    if (this.user.getRole().equals(Role.Private)) {
+                        sendMessageToClient("You don't have permission to reject requests. Please try again!");
+                        continue;
+                    }
+
+                    synchronized (requests) {
+                        for (Map.Entry<UUID, Request> set : requests.entrySet()) {
+                            if (set.getKey().toString().equals(commandArgs[1])) {
+                                if (set.getValue().getApproval().equals(this.user.getRole()) || this.user.getRole().equals(Role.General)) {
+                                    synchronized (lock) {
+                                        requestsRejected++;
+                                    }
+                                    unicastMessage(set.getValue().getUser().getUsername(), "Your missile launch request to " + set.getValue().getLocation() + " with reason: " + set.getValue().getReason() + " has been rejected!");
+                                } else {
+                                    sendMessageToClient("You don't have permission to reject this request. Please try again!");
+                                }
+                            }
+                        }
+                    }
+                } else if (command.startsWith("/promote")) {
+                    String[] commandArgs = command.split("\\s+", 3);
+
+                    if (isInvalidCommand(commandArgs.length, 3)) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
+
+                    if (isInvalidRole(commandArgs[2])) {
+                        sendMessageToClient("Invalid role. Please try again!");
+                        continue;
+                    }
+
+                    if (!this.user.getRole().equals(Role.General)) {
+                        sendMessageToClient("You don't have permission to promote. Please try again!");
+                        continue;
+                    }
+
+                    synchronized (clients) {
+                        for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
+                            if (entry.getValue().getUsername().equals(commandArgs[1])) {
+                                entry.getValue().setRole(Role.valueOf(commandArgs[2]));
+                            }
+                        }
+                    }
+                } else if (command.startsWith("/demote")) {
+                    String[] commandArgs = command.split("\\s+", 3);
+
+                    if (isInvalidCommand(commandArgs.length, 3)) {
+                        sendMessageToClient("Invalid command. Please try again!");
+                        continue;
+                    }
+
+                    if (isInvalidRole(commandArgs[2])) {
+                        sendMessageToClient("Invalid role. Please try again!");
+                        continue;
+                    }
+
+                    if (!this.user.getRole().equals(Role.General)) {
+                        sendMessageToClient("You don't have permission to demote. Please try again!");
+                        continue;
+                    }
+
+                    synchronized (clients) {
+                        for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
+                            if (entry.getValue().getUsername().equals(commandArgs[1])) {
+                                entry.getValue().setRole(Role.valueOf(commandArgs[2]));
                             }
                         }
                     }
                 } else {
                     sendMessageToClient("Invalid command. Please try again!");
-                    return;
                 }
             }
         }
 
         private boolean isInvalidRole(String role) {
-            if (!Role.Private.name().equals(role) && !Role.Sergeant.name().equals(role) && !Role.Lieutenant.name().equals(role) && !Role.General.name().equals(role)) {
-                sendMessageToClient("Invalid role. Please try again!");
-                return true;
-            }
-            return false;
+            return !Role.Private.name().equals(role) && !Role.Sergeant.name().equals(role) && !Role.Lieutenant.name().equals(role) && !Role.General.name().equals(role);
         }
 
         private boolean isInvalidCommand(int commandArgsLength, int maxArgsLength) {
-            if (commandArgsLength != maxArgsLength) {
-                sendMessageToClient("Invalid command. Please try again!");
-                return true;
-            }
-            return false;
+            return commandArgsLength != maxArgsLength;
         }
 
         private void sendMessageToClient(String message) {
@@ -222,12 +445,12 @@ public class Server {
 
         private void unicastMessage(String username, String message) {
             synchronized (clients) {
-                for (Map.Entry<ClientHandler, User> set : clients.entrySet()) {
-                    if (set.getValue().getUsername().equals(username)) {
+                for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
+                    if (entry.getValue().getUsername().equals(username)) {
                         try {
-                            set.getKey().bufferedWriter.write("[%s] [Say] (%s)%s: %s%n".formatted(getCurrentTime(), this.user.getRole(), this.user.getUsername(), message));
-                            set.getKey().bufferedWriter.newLine();
-                            set.getKey().bufferedWriter.flush();
+                            entry.getKey().bufferedWriter.write("[%s] [Say] (%s)%s: %s%n".formatted(getCurrentTime(), this.user.getRole(), this.user.getUsername(), message));
+                            entry.getKey().bufferedWriter.newLine();
+                            entry.getKey().bufferedWriter.flush();
                         } catch (Exception e) {
                             handleException("An unexpected error has occurred during broadcasting message!", e);
                         }
@@ -238,12 +461,12 @@ public class Server {
 
         private void multicastMessage(Role role, String message) {
             synchronized (clients) {
-                for (Map.Entry<ClientHandler, User> set : clients.entrySet()) {
-                    if (set.getValue().getRole().equals(role)) {
+                for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
+                    if (entry.getValue().getRole().equals(role)) {
                         try {
-                            set.getKey().bufferedWriter.write("[%s] [Rank] (%s)%s: %s%n".formatted(getCurrentTime(), this.user.getRole(), this.user.getUsername(), message));
-                            set.getKey().bufferedWriter.newLine();
-                            set.getKey().bufferedWriter.flush();
+                            entry.getKey().bufferedWriter.write("[%s] [Rank %s] (%s)%s: %s%n".formatted(getCurrentTime(), role.toString(), this.user.getRole(), this.user.getUsername(), message));
+                            entry.getKey().bufferedWriter.newLine();
+                            entry.getKey().bufferedWriter.flush();
                         } catch (Exception e) {
                             handleException("An unexpected error has occurred during broadcasting message!", e);
                         }
@@ -254,16 +477,36 @@ public class Server {
 
         private void broadcastMessage(String message) {
             synchronized (clients) {
-                for (Map.Entry<ClientHandler, User> set : clients.entrySet()) {
-                    if (set.getKey() != this) {
+                for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
+                    if (entry.getKey() != this) {
                         try {
-                            set.getKey().bufferedWriter.write("[%s] [All] (%s)%s: %s%n".formatted(getCurrentTime(), this.user.getRole(), this.user.getUsername(), message));
-                            set.getKey().bufferedWriter.newLine();
-                            set.getKey().bufferedWriter.flush();
+                            entry.getKey().bufferedWriter.write("[%s] [All] (%s)%s: %s%n".formatted(getCurrentTime(), this.user.getRole(), this.user.getUsername(), message));
+                            entry.getKey().bufferedWriter.newLine();
+                            entry.getKey().bufferedWriter.flush();
                         } catch (Exception e) {
                             handleException("An unexpected error has occurred during broadcasting message!", e);
                         }
                     }
+                }
+            }
+        }
+
+        private void broadcastMessageRoom(String roomName, String message) {
+            synchronized (rooms) {
+                if (rooms.containsKey(roomName)) {
+                    for (ClientHandler client : rooms.get(roomName)) {
+                        if (client != this) {
+                            try {
+                                client.bufferedWriter.write("[%s] [Room %s] (%s)%s: %s%n".formatted(getCurrentTime(), roomName, this.user.getRole(), this.user.getUsername(), message));
+                                client.bufferedWriter.newLine();
+                                client.bufferedWriter.flush();
+                            } catch (Exception e) {
+                                handleException("An unexpected error has occurred during broadcasting message!", e);
+                            }
+                        }
+                    }
+                } else {
+                    sendMessageToClient("The room doesn't exist. Please try again!");
                 }
             }
         }
@@ -280,6 +523,44 @@ public class Server {
                 handleException("Couldn't close buffered writer buffered reader & socket!", e);
             } catch (Exception e) {
                 handleException("An unexpected error has occurred during closing connection!", e);
+            }
+        }
+    }
+
+    private class ActiveMembersTask extends TimerTask {
+        @Override
+        public void run() {
+            synchronized (clients) {
+                for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
+                    if (entry.getValue() != null && entry.getValue().getRole().equals(Role.General)) {
+                        try {
+                            entry.getKey().bufferedWriter.write("[%s] [SERVER] Active users: %s%n".formatted(getCurrentTime(), clients.size()));
+                            entry.getKey().bufferedWriter.newLine();
+                            entry.getKey().bufferedWriter.flush();
+                        } catch (Exception e) {
+                            System.err.println("An unexpected error has occurred during broadcasting message!\n" + e.getMessage());
+                            System.exit(1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private class RequestsTask extends TimerTask {
+        @Override
+        public void run() {
+            synchronized (clients) {
+                for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
+                    try {
+                        entry.getKey().bufferedWriter.write("[%s] [SERVER] Requests pending: %s, Requests accepted: %s, Requests rejected: %s%n".formatted(getCurrentTime(), requests.size(), requestsAccepted, requestsRejected));
+                        entry.getKey().bufferedWriter.newLine();
+                        entry.getKey().bufferedWriter.flush();
+                    } catch (Exception e) {
+                        System.err.println("An unexpected error has occurred during broadcasting message!\n" + e.getMessage());
+                        System.exit(1);
+                    }
+                }
             }
         }
     }

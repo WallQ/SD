@@ -20,7 +20,7 @@ public class User {
         this.username = username;
         this.email = email;
         this.password = password;
-        this.role = Role.Recruit;
+        this.role = Role.Private;
     }
 
     public User(UUID id, String username, String email, String password, Role role) {
