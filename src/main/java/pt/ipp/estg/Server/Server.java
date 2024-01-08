@@ -17,6 +17,8 @@ public class Server {
     protected static final Map<String, List<ClientHandler>> rooms = new HashMap<>();
     protected static final Map<ClientHandler, User> clients = new HashMap<>();
     protected static final Map<UUID, Request> requests = new HashMap<>();
+    private static final Map<String, List<String>> offlineMessages = new HashMap<>();
+
     private static final Object lock = new Object();
     protected static int requestsAccepted = 0, requestsRejected = 0;
     private Timer activeMembersTimer, requestsTimer;
@@ -150,6 +152,15 @@ public class Server {
                     }
                     isAuthenticated = true;
                     System.out.printf("[%s %s] (%s)%s connected!%n", getCurrentTime(), getClientAddress(this.socket), this.user.getRole(), this.user.getUsername());
+                    synchronized (offlineMessages) {
+                        if (offlineMessages.containsKey(this.user.getUsername())) {
+                            List<String> messages = offlineMessages.get(this.user.getUsername());
+                            for (String offlineMessage : messages) {
+                                sendMessageToClient(offlineMessage);
+                            }
+                            offlineMessages.remove(this.user.getUsername());
+                        }
+                    }
                 } else {
                     sendMessageToClient("Authentication failed. Please try again!");
                 }
@@ -445,8 +456,11 @@ public class Server {
 
         private void unicastMessage(String username, String message) {
             synchronized (clients) {
+                boolean userOnline = false;
+
                 for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
                     if (entry.getValue().getUsername().equals(username)) {
+                        userOnline = true;
                         try {
                             entry.getKey().bufferedWriter.write("[%s] [Say] (%s)%s: %s%n".formatted(getCurrentTime(), this.user.getRole(), this.user.getUsername(), message));
                             entry.getKey().bufferedWriter.newLine();
@@ -454,6 +468,15 @@ public class Server {
                         } catch (Exception e) {
                             handleException("An unexpected error has occurred during broadcasting message!", e);
                         }
+                    }
+                }
+
+                if (!userOnline) {
+                    synchronized (offlineMessages) {
+                        if (!offlineMessages.containsKey(username)) {
+                            offlineMessages.put(username, new ArrayList<>());
+                        }
+                        offlineMessages.get(username).add("[%s] [Say] (%s)%s: %s%n".formatted(getCurrentTime(), this.user.getRole(), this.user.getUsername(), message));
                     }
                 }
             }
@@ -516,6 +539,11 @@ public class Server {
                 if (socket != null) socket.close();
                 if (bufferedWriter != null) bufferedWriter.close();
                 if (bufferedReader != null) bufferedReader.close();
+                synchronized (rooms) {
+                    for (Map.Entry<String, List<ClientHandler>> set : rooms.entrySet()) {
+                        set.getValue().remove(this);
+                    }
+                }
                 synchronized (clients) {
                     clients.remove(this);
                 }
