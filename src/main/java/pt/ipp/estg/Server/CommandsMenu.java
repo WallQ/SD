@@ -1,7 +1,6 @@
 package pt.ipp.estg.Server;
 
 public class CommandsMenu {
-
     public static String AuthenticationCommands() {
         return """
                 [Authentication Commands]
@@ -14,7 +13,7 @@ public class CommandsMenu {
         return """
                 [Message Commands]
                 /whisper {username} {message}
-                /say {role} {message}
+                /say {role (Private, Sergeant, Lieutenant, General)} {message}
                 /all {message}
                 /room {room name} {message}
                 /create-room {room name}
