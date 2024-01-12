@@ -266,7 +266,7 @@ public class Server {
                     }
 
                     synchronized (rooms) {
-                        if (rooms.containsKey(commandArgs[1])) {
+                        if (rooms.containsKey(commandArgs[1]) && !rooms.get(commandArgs[1]).contains(this)) {
                             rooms.get(commandArgs[1]).add(this);
                             Logger.log(getClientAddress(this.socket), "Joining", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " joined room " + commandArgs[1] + ".");
                         } else {
@@ -282,8 +282,11 @@ public class Server {
                     }
 
                     synchronized (rooms) {
-                        if (rooms.containsKey(commandArgs[1])) {
+                        if (rooms.containsKey(commandArgs[1]) && rooms.get(commandArgs[1]).contains(this)) {
                             rooms.get(commandArgs[1]).remove(this);
+                            if (rooms.get(commandArgs[1]).isEmpty()) {
+                                rooms.remove(commandArgs[1]);
+                            }
                             Logger.log(getClientAddress(this.socket), "Leave", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " left room " + commandArgs[1] + ".");
                         } else {
                             sendMessageToClient("The room doesn't exist. Please try again!");
@@ -553,7 +556,7 @@ public class Server {
 
         private void broadcastMessageRoom(String roomName, String message) {
             synchronized (rooms) {
-                if (rooms.containsKey(roomName)) {
+                if (rooms.containsKey(roomName) && rooms.get(roomName).contains(this)) {
                     for (ClientHandler client : rooms.get(roomName)) {
                         if (client != this) {
                             try {
