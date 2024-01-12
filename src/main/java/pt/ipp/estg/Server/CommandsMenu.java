@@ -1,6 +1,19 @@
 package pt.ipp.estg.Server;
 
+/**
+ * The {@code CommandsMenu} class provides static methods to generate command menus
+ * for different categories, such as authentication, messaging, offensive actions, and management.
+ * These commands can be used in an application to perform various actions.
+ *
+ * @author Carlos Leite, Sergio Felix
+ * @version 1.0
+ */
 public class CommandsMenu {
+    /**
+     * Generates a command menu for authentication-related commands.
+     *
+     * @return A string containing authentication-related commands.
+     */
     public static String AuthenticationCommands() {
         return """
                 [Authentication Commands]
@@ -9,6 +22,11 @@ public class CommandsMenu {
                 """;
     }
 
+    /**
+     * Generates a command menu for messaging-related commands.
+     *
+     * @return A string containing messaging-related commands.
+     */
     public static String MessageCommands() {
         return """
                 [Message Commands]
@@ -23,6 +41,11 @@ public class CommandsMenu {
                 """;
     }
 
+    /**
+     * Generates a command menu for offensive action-related commands.
+     *
+     * @return A string containing offensive action-related commands.
+     */
     public static String OffensiveCommands() {
         return """
                 [Offensive Commands]
@@ -30,6 +53,11 @@ public class CommandsMenu {
                 """;
     }
 
+    /**
+     * Generates a command menu for management-related commands.
+     *
+     * @return A string containing management-related commands.
+     */
     public static String ManagementCommands() {
         return """
                 [Management Commands]
