@@ -1,39 +1,126 @@
 package pt.ipp.estg.Server;
 
-import pt.ipp.estg.Entities.Logger;
 import pt.ipp.estg.Entities.Request;
 import pt.ipp.estg.Entities.User;
 import pt.ipp.estg.Enums.Role;
+import pt.ipp.estg.Utils.Logger;
 
 import java.io.*;
+import java.net.InetAddress;
+import java.net.MulticastSocket;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
+/**
+ * The {@code Server} class represents a simple chat server that handles client connections,
+ * user authentication, and communication between clients. It utilizes multithreading and
+ * timers to manage various tasks such as monitoring active members and displaying pending requests.
+ * <p>
+ * This class is designed to be used within a chat application.
+ *
+ * @author Carlos Leite, Sergio Felix
+ * @version 1.0
+ */
 public class Server {
-    private static final int SERVER_PORT = 1024;
-    protected ServerSocket serverSocket;
+    /**
+     * A mapping of room names to lists of client handlers in each room.
+     */
     protected static final Map<String, List<ClientHandler>> rooms = new HashMap<>();
+    /**
+     * A mapping of client handlers to associated user information.
+     */
     protected static final Map<ClientHandler, User> clients = new HashMap<>();
+    /**
+     * A mapping of request IDs to request objects.
+     */
     protected static final Map<UUID, Request> requests = new HashMap<>();
-    private static final Map<String, List<String>> offlineMessages = new HashMap<>();
-    private static final Object lock = new Object();
-    protected static int requestsAccepted = 0, requestsRejected = 0;
+    /**
+     * A mapping of usernames to lists of offline messages for each user.
+     */
+    protected static final Map<String, List<String>> offlineMessages = new HashMap<>();
+    /**
+     * An object used for synchronization.
+     */
+    protected static final Object lock = new Object();
+    /**
+     * The port on which the server listens for incoming connections.
+     */
+    private static final int SERVER_PORT = 1024;
+    /**
+     * The count of requests accepted by the server.
+     */
+    protected static int requestsAccepted = 0;
+    /**
+     * The count of requests rejected by the server.
+     */
+    protected static int requestsRejected = 0;
+    /**
+     * The server socket used for accepting client connections.
+     */
+    protected ServerSocket serverSocket;
+    /**
+     * The multicast socket used for handling multicast communication.
+     */
+    protected MulticastSocket multicastSocket;
+    /**
+     * The multicast group address.
+     */
+    protected InetAddress group;
 
+    /**
+     * Constructs a new {@code Server} with the specified server socket.
+     *
+     * @param serverSocket The server socket used for accepting client connections.
+     */
     public Server(ServerSocket serverSocket) {
         this.serverSocket = serverSocket;
     }
 
+    /**
+     * The main method to start the server. It initializes the server socket and starts the server.
+     *
+     * @param args The command-line arguments (not used in this application).
+     */
+    public static void main(String[] args) {
+        try (
+                ServerSocket serverSocket = new ServerSocket(SERVER_PORT)
+        ) {
+            Server server = new Server(serverSocket);
+            server.start();
+        } catch (IOException e) {
+            System.err.println("Couldn't get I/O for the connection listen on port " + SERVER_PORT + "!\n" + e.getMessage());
+            System.exit(1);
+        } catch (Exception e) {
+            System.err.println("An unexpected error has occurred!\n" + e.getMessage());
+            System.exit(1);
+        }
+    }
+
+    /**
+     * Gets the current time in the "dd/MM/yyyy HH:mm:ss" format.
+     *
+     * @return The current time as a formatted string.
+     */
     private String getCurrentTime() {
         return new SimpleDateFormat("dd/MM/yyyy HH:mm:ss").format(new Date());
     }
 
+    /**
+     * Gets the client address based on the client socket's IP address and port.
+     *
+     * @param clientSocket The client socket.
+     * @return The formatted client address.
+     */
     private String getClientAddress(Socket clientSocket) {
         return clientSocket.getInetAddress().getHostAddress() + ":" + clientSocket.getPort();
     }
 
+    /**
+     * Initializes and starts timers for monitoring active members and displaying pending requests.
+     */
     private void initializeTimers() {
         Timer activeMembersTimer = new Timer(true);
         activeMembersTimer.scheduleAtFixedRate(new ActiveMembersTask(), 0, 150000);
@@ -42,6 +129,9 @@ public class Server {
         requestsTimer.scheduleAtFixedRate(new RequestsTask(), 0, 300000);
     }
 
+    /**
+     * Accepts client connections and spawns a new thread for each connected client.
+     */
     private void acceptConnections() {
         while (!this.serverSocket.isClosed()) {
             try {
@@ -58,6 +148,9 @@ public class Server {
         }
     }
 
+    /**
+     * Starts the server by initializing timers and accepting client connections.
+     */
     private void start() {
         try {
             initializeTimers();
@@ -68,27 +161,38 @@ public class Server {
         }
     }
 
-    public static void main(String[] args) {
-        try (
-                ServerSocket serverSocket = new ServerSocket(SERVER_PORT)
-        ) {
-            Server server = new Server(serverSocket);
-            server.start();
-        } catch (IOException e) {
-            System.err.println("Couldn't get I/O for the connection listen on port " + SERVER_PORT + "!\n" + e.getMessage());
-            System.exit(1);
-        } catch (Exception e) {
-            System.err.println("An unexpected error has occurred!\n" + e.getMessage());
-            System.exit(1);
-        }
-    }
-
+    /**
+     * The {@code ClientHandler} class represents a thread responsible for handling the communication
+     * with a connected client. It manages user authentication, message handling, and other client-related
+     * actions within the server.
+     * This class is designed to be used within a server application.
+     *
+     * @author Your Name
+     * @version 1.0
+     */
     private static class ClientHandler implements Runnable {
+        /**
+         * The socket associated with the connected client.
+         */
         private final Socket socket;
+        /**
+         * The buffered writer used for sending messages to the client.
+         */
         private BufferedWriter bufferedWriter;
+        /**
+         * The buffered reader used for reading messages from the client.
+         */
         private BufferedReader bufferedReader;
+        /**
+         * The user associated with the connected client.
+         */
         private User user;
 
+        /**
+         * Constructs a new {@code ClientHandler} for the specified client socket.
+         *
+         * @param socket The client socket.
+         */
         public ClientHandler(Socket socket) {
             this.socket = socket;
             try {
@@ -100,19 +204,39 @@ public class Server {
             }
         }
 
+        /**
+         * Gets the current time in the format "dd/MM/yyyy HH:mm:ss".
+         *
+         * @return The current time as a formatted string.
+         */
         private String getCurrentTime() {
             return new SimpleDateFormat("dd/MM/yyyy HH:mm:ss").format(new Date());
         }
 
+        /**
+         * Gets the client address based on the client socket's IP address and port.
+         *
+         * @param clientSocket The client socket.
+         * @return The formatted client address.
+         */
         private String getClientAddress(Socket clientSocket) {
             return clientSocket.getInetAddress().getHostAddress() + ":" + clientSocket.getPort();
         }
 
+        /**
+         * Handles an exception by printing an error message and exiting the application.
+         *
+         * @param message The error message to display.
+         * @param e       The exception that occurred.
+         */
         private void handleException(String message, Exception e) {
             System.err.println(message + "\n" + e.getMessage());
             System.exit(1);
         }
 
+        /**
+         * Executes the client handling logic, including user authentication and message handling.
+         */
         @Override
         public void run() {
             try {
@@ -126,6 +250,12 @@ public class Server {
             }
         }
 
+        /**
+         * Authenticates the user by processing sign-up or sign-in commands until the user
+         * is successfully authenticated. Invalid commands result in appropriate error messages.
+         *
+         * @throws IOException If an I/O error occurs during communication.
+         */
         private void authenticateUser() throws IOException {
             boolean isAuthenticated = false;
 
@@ -151,6 +281,12 @@ public class Server {
             }
         }
 
+        /**
+         * Handles a sign-up command by extracting command arguments, validating them,
+         * and invoking the sign-up method. If the command is invalid, it is ignored.
+         *
+         * @param command The sign-up command from the client.
+         */
         private void handleSignUp(String command) {
             String[] commandArgs = command.split("\\s+", 5);
 
@@ -160,6 +296,12 @@ public class Server {
             this.user = Auth.signUp(commandArgs[1], commandArgs[2], commandArgs[3], commandArgs[4]);
         }
 
+        /**
+         * Handles a sign-in command by extracting command arguments, validating them,
+         * and invoking the sign-in method. If the command is invalid, it is ignored.
+         *
+         * @param command The sign-in command from the client.
+         */
         private void handleSignIn(String command) {
             String[] commandArgs = command.split("\\s+", 3);
 
@@ -168,6 +310,10 @@ public class Server {
             this.user = Auth.signIn(commandArgs[1], commandArgs[2]);
         }
 
+        /**
+         * Handles successful user authentication by updating the clients map, logging
+         * the authentication event, and displaying a connection message.
+         */
         private void handleSuccessfulAuthentication() {
             synchronized (clients) {
                 clients.put(this, this.user);
@@ -177,6 +323,10 @@ public class Server {
             handleOfflineMessages();
         }
 
+        /**
+         * Handles offline messages for the client. Sends stored messages to the client if any
+         * are present in the offlineMessages map, and removes the messages from the map.
+         */
         private void handleOfflineMessages() {
             synchronized (offlineMessages) {
                 if (offlineMessages.containsKey(this.user.getUsername())) {
@@ -187,6 +337,12 @@ public class Server {
             }
         }
 
+        /**
+         * Handles various user actions, such as sending private, role-specific, and global messages,
+         * creating, joining, and leaving chat rooms, launching missiles, managing requests, and promoting/demoting users.
+         *
+         * @throws IOException If an I/O error occurs during communication.
+         */
         private void handleAction() throws IOException {
             String command;
 
@@ -470,20 +626,41 @@ public class Server {
             }
         }
 
+        /**
+         * Sends available commands related to messages, offensive actions, and management to the client.
+         */
         private void sendMessageToClientCommands() {
             sendMessageToClient(CommandsMenu.MessageCommands());
             sendMessageToClient(CommandsMenu.OffensiveCommands());
             sendMessageToClient(CommandsMenu.ManagementCommands());
         }
 
+        /**
+         * Checks if the provided role string is valid.
+         *
+         * @param role The role string to check.
+         * @return {@code true} if the role is valid, {@code false} otherwise.
+         */
         private boolean isInvalidRole(String role) {
             return !Role.Private.name().equals(role) && !Role.Sergeant.name().equals(role) && !Role.Lieutenant.name().equals(role) && !Role.General.name().equals(role);
         }
 
+        /**
+         * Checks if the command arguments length is valid.
+         *
+         * @param commandArgsLength The length of command arguments.
+         * @param maxArgsLength     The maximum allowed length of command arguments.
+         * @return {@code true} if the length is invalid, {@code false} otherwise.
+         */
         private boolean isInvalidCommand(int commandArgsLength, int maxArgsLength) {
             return commandArgsLength != maxArgsLength;
         }
 
+        /**
+         * Sends a message to the connected client.
+         *
+         * @param message The message to send.
+         */
         private void sendMessageToClient(String message) {
             try {
                 this.bufferedWriter.write(message);
@@ -494,6 +671,12 @@ public class Server {
             }
         }
 
+        /**
+         * Handles sending private messages to a specific user.
+         *
+         * @param username The username of the recipient.
+         * @param message  The message to send.
+         */
         private void unicastMessage(String username, String message) {
             synchronized (clients) {
                 boolean userOnline = false;
@@ -522,6 +705,12 @@ public class Server {
             }
         }
 
+        /**
+         * Handles broadcasting messages to users with a specific role.
+         *
+         * @param role    The role of the recipients.
+         * @param message The message to broadcast.
+         */
         private void multicastMessage(Role role, String message) {
             synchronized (clients) {
                 for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
@@ -538,6 +727,11 @@ public class Server {
             }
         }
 
+        /**
+         * Handles broadcasting messages to all connected clients except the sender.
+         *
+         * @param message The message to broadcast.
+         */
         private void broadcastMessage(String message) {
             synchronized (clients) {
                 for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
@@ -554,6 +748,12 @@ public class Server {
             }
         }
 
+        /**
+         * Handles broadcasting messages to all clients in a specific chat room.
+         *
+         * @param roomName The name of the chat room.
+         * @param message  The message to broadcast.
+         */
         private void broadcastMessageRoom(String roomName, String message) {
             synchronized (rooms) {
                 if (rooms.containsKey(roomName) && rooms.get(roomName).contains(this)) {
@@ -574,6 +774,9 @@ public class Server {
             }
         }
 
+        /**
+         * Closes the client handler by closing the socket, buffered writer, and buffered reader.
+         */
         private void close() {
             try {
                 if (this.socket != null) this.socket.close();
@@ -595,7 +798,20 @@ public class Server {
         }
     }
 
+    /**
+     * The {@code ActiveMembersTask} class is a TimerTask used for periodically notifying
+     * active users, specifically users with the role of General, about the total number
+     * of active users on the server.
+     * It runs at a specified interval to provide updates.
+     * This class is designed to be used within a server application.
+     *
+     * @author Your Name
+     * @version 1.0
+     */
     private class ActiveMembersTask extends TimerTask {
+        /**
+         * Executes the task, notifying active users about the total number of active users.
+         */
         @Override
         public void run() {
             synchronized (clients) {
@@ -615,7 +831,20 @@ public class Server {
         }
     }
 
+    /**
+     * The {@code RequestsTask} class is a TimerTask used for periodically notifying
+     * users about the number of pending, accepted, and rejected requests on the server.
+     * It runs at a specified interval to provide updates.
+     * This class is designed to be used within a server application.
+     *
+     * @author Your Name
+     * @version 1.0
+     */
     private class RequestsTask extends TimerTask {
+        /**
+         * Executes the task, notifying users about the number of pending, accepted,
+         * and rejected requests on the server.
+         */
         @Override
         public void run() {
             synchronized (clients) {
