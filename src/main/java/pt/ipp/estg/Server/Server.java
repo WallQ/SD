@@ -394,8 +394,20 @@ public class Server {
                         continue;
                     }
 
-                    Logger.log(getClientAddress(this.socket), "Message", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " sent a message to room " + commandArgs[1] + ".");
-                    broadcastMessageRoom(commandArgs[1], commandArgs[2]);
+                    synchronized (rooms) {
+                        if (!rooms.containsKey(commandArgs[1])) {
+                            sendMessageToClient("The room doesn't exist. Please try again!");
+                            continue;
+                        }
+
+                        if (!rooms.get(commandArgs[1]).contains(this)) {
+                            sendMessageToClient("You're not in the room. Please try again!");
+                            continue;
+                        }
+
+                        Logger.log(getClientAddress(this.socket), "Message", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " sent a message to room " + commandArgs[1] + ".");
+                        broadcastMessageRoom(commandArgs[1], commandArgs[2]);
+                    }
                 } else if (command.startsWith("/create-room")) {
                     String[] commandArgs = command.split("\\s+", 2);
 
@@ -537,6 +549,8 @@ public class Server {
                                 } else {
                                     sendMessageToClient("You don't have permission to accept this request. Please try again!");
                                 }
+                            } else {
+                                sendMessageToClient("The request doesn't exist. Please try again!");
                             }
                         }
                     }
@@ -565,6 +579,8 @@ public class Server {
                                 } else {
                                     sendMessageToClient("You don't have permission to reject this request. Please try again!");
                                 }
+                            } else {
+                                sendMessageToClient("The request doesn't exist. Please try again!");
                             }
                         }
                     }
@@ -591,6 +607,8 @@ public class Server {
                             if (entry.getValue().getUsername().equals(commandArgs[1])) {
                                 entry.getValue().setRole(Role.valueOf(commandArgs[2]));
                                 Logger.log(getClientAddress(this.socket), "Promote", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " promoted user " + commandArgs[1] + " to " + commandArgs[2] + ".");
+                            } else {
+                                sendMessageToClient("The user doesn't exist. Please try again!");
                             }
                         }
                     }
@@ -617,6 +635,8 @@ public class Server {
                             if (entry.getValue().getUsername().equals(commandArgs[1])) {
                                 entry.getValue().setRole(Role.valueOf(commandArgs[2]));
                                 Logger.log(getClientAddress(this.socket), "Demote", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " demoted user " + commandArgs[1] + " to " + commandArgs[2] + ".");
+                            } else {
+                                sendMessageToClient("The user doesn't exist. Please try again!");
                             }
                         }
                     }
@@ -701,6 +721,7 @@ public class Server {
                         }
                         offlineMessages.get(username).add("[%s] [Say] (%s)%s: %s%n".formatted(getCurrentTime(), this.user.getRole(), this.user.getUsername(), message));
                     }
+                    sendMessageToClient("The user is offline. Your message will be sent when the user is online!");
                 }
             }
         }
@@ -756,8 +777,7 @@ public class Server {
          */
         private void broadcastMessageRoom(String roomName, String message) {
             synchronized (rooms) {
-                if (rooms.containsKey(roomName) && rooms.get(roomName).contains(this)) {
-                    for (ClientHandler client : rooms.get(roomName)) {
+                for (ClientHandler client : rooms.get(roomName)) {
                         if (client != this) {
                             try {
                                 client.bufferedWriter.write("[%s] [Room %s] (%s)%s: %s%n".formatted(getCurrentTime(), roomName, this.user.getRole(), this.user.getUsername(), message));
@@ -768,9 +788,6 @@ public class Server {
                             }
                         }
                     }
-                } else {
-                    sendMessageToClient("The room doesn't exist. Please try again!");
-                }
             }
         }
 
