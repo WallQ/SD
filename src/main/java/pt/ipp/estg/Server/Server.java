@@ -30,9 +30,9 @@ public class Server {
      */
     protected static final Map<String, List<ClientHandler>> rooms = new HashMap<>();
     /**
-     * A mapping of client handlers to associated user information.
+     * A list of client handlers.
      */
-    protected static final Map<ClientHandler, User> clients = new HashMap<>();
+    protected static final List<ClientHandler> clients = new ArrayList<>();
     /**
      * A mapping of request IDs to request objects.
      */
@@ -139,7 +139,7 @@ public class Server {
                 Logger.log(getClientAddress(clientSocket), "Connection", "New connection established.");
                 System.out.printf("[%s %s] New connection!%n", getCurrentTime(), getClientAddress(clientSocket));
                 ClientHandler handler = new ClientHandler(clientSocket);
-                clients.put(handler, null);
+                clients.add(handler);
                 new Thread(handler).start();
             } catch (Exception e) {
                 System.err.println("An unexpected error has occurred during server initialization!\n" + e.getMessage());
@@ -316,7 +316,7 @@ public class Server {
          */
         private void handleSuccessfulAuthentication() {
             synchronized (clients) {
-                clients.put(this, this.user);
+                clients.add(this);
             }
             Logger.log(getClientAddress(this.socket), "Authentication", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " authenticated.");
             System.out.printf("[%s %s] (%s)%s connected!%n", getCurrentTime(), getClientAddress(this.socket), this.user.getRole(), this.user.getUsername());
@@ -434,7 +434,11 @@ public class Server {
                     }
 
                     synchronized (rooms) {
-                        if (rooms.containsKey(commandArgs[1]) && !rooms.get(commandArgs[1]).contains(this)) {
+                        if (rooms.containsKey(commandArgs[1])) {
+                            if (rooms.get(commandArgs[1]).contains(this)) {
+                                sendMessageToClient("You're already in the room.");
+                                continue;
+                            }
                             rooms.get(commandArgs[1]).add(this);
                             Logger.log(getClientAddress(this.socket), "Joining", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " joined room " + commandArgs[1] + ".");
                         } else {
@@ -450,7 +454,11 @@ public class Server {
                     }
 
                     synchronized (rooms) {
-                        if (rooms.containsKey(commandArgs[1]) && rooms.get(commandArgs[1]).contains(this)) {
+                        if (rooms.containsKey(commandArgs[1])) {
+                            if (!rooms.get(commandArgs[1]).contains(this)) {
+                                sendMessageToClient("You're not in the room.");
+                                continue;
+                            }
                             rooms.get(commandArgs[1]).remove(this);
                             if (rooms.get(commandArgs[1]).isEmpty()) {
                                 rooms.remove(commandArgs[1]);
@@ -469,6 +477,11 @@ public class Server {
                     }
 
                     synchronized (rooms) {
+                        if (rooms.isEmpty()) {
+                            sendMessageToClient("There are no rooms available.");
+                            continue;
+                        }
+
                         for (Map.Entry<String, List<ClientHandler>> set : rooms.entrySet()) {
                             sendMessageToClient("[Available Rooms]\nRoom: " + set.getKey() + "\nUsers: " + set.getValue().size());
                             Logger.log(getClientAddress(this.socket), "Listing", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " listed room " + set.getKey() + ".");
@@ -482,23 +495,15 @@ public class Server {
                         continue;
                     }
 
-                    if (this.user.getRole().equals(Role.Private)) {
-                        synchronized (requests) {
-                            requests.put(UUID.randomUUID(), new Request(this.user, commandArgs[1], commandArgs[2], Role.Sergeant));
-                            multicastMessage(Role.Sergeant, "I've sent you a request for a new missile launch to " + commandArgs[1] + " with reason: " + commandArgs[2]);
+                    synchronized (requests) {
+                        Role approvalRole = getApprovalRole();
+
+                        if (approvalRole != null) {
+                            requests.put(UUID.randomUUID(), new Request(this.user, commandArgs[1], commandArgs[2], approvalRole));
+                            multicastMessage(approvalRole, "I've sent you a request for a new missile launch to " + commandArgs[1] + " with reason: " + commandArgs[2]);
+                        } else {
+                            broadcastMessage("Missile launched to " + commandArgs[1] + " with reason: " + commandArgs[2]);
                         }
-                    } else if (this.user.getRole().equals(Role.Sergeant)) {
-                        synchronized (requests) {
-                            requests.put(UUID.randomUUID(), new Request(this.user, commandArgs[1], commandArgs[2], Role.Lieutenant));
-                            multicastMessage(Role.Lieutenant, "I've sent you a request for a new missile launch to " + commandArgs[1] + " with reason: " + commandArgs[2]);
-                        }
-                    } else if (this.user.getRole().equals(Role.Lieutenant)) {
-                        synchronized (requests) {
-                            requests.put(UUID.randomUUID(), new Request(this.user, commandArgs[1], commandArgs[2], Role.General));
-                            multicastMessage(Role.General, "I've sent you a request for a new missile launch to " + commandArgs[1] + " with reason: " + commandArgs[2]);
-                        }
-                    } else if (this.user.getRole().equals(Role.General)) {
-                        broadcastMessage("Missile launched to " + commandArgs[1] + " with reason: " + commandArgs[2]);
                     }
 
                     Logger.log(getClientAddress(this.socket), "Attack", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " launched a missile to " + commandArgs[1] + " with reason: " + commandArgs[2] + ".");
@@ -511,15 +516,15 @@ public class Server {
                     }
 
                     if (this.user.getRole().equals(Role.Private)) {
-                        sendMessageToClient("You don't have permission to list requests. Please try again!");
+                        sendMessageToClient("You don't have permission to list requests.");
                         continue;
                     }
 
                     synchronized (requests) {
-                        for (Map.Entry<UUID, Request> set : requests.entrySet()) {
-                            if (Objects.equals(set.getValue().getApproval(), this.user.getRole()) || this.user.getRole().equals(Role.General)) {
-                                sendMessageToClient("[Available Requests]\nID: " + set.getKey() + "\nUser: " + set.getValue().getUser().getUsername() + "\nLocation: " + set.getValue().getLocation() + "\nReason: " + set.getValue().getReason());
-                                Logger.log(getClientAddress(this.socket), "Listing", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " listed requests " + set.getKey() + ".");
+                        for (Map.Entry<UUID, Request> entry : requests.entrySet()) {
+                            if (entry.getValue().getApproval().equals(this.user.getRole()) || this.user.getRole().equals(Role.General)) {
+                                sendMessageToClient("[Available Requests]\nID: " + entry.getKey() + "\nUser: " + entry.getValue().getUser().getUsername() + "\nLocation: " + entry.getValue().getLocation() + "\nReason: " + entry.getValue().getReason());
+                                Logger.log(getClientAddress(this.socket), "Listing", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " listed requests " + entry.getKey() + ".");
                             }
                         }
                     }
@@ -532,20 +537,20 @@ public class Server {
                     }
 
                     if (this.user.getRole().equals(Role.Private)) {
-                        sendMessageToClient("You don't have permission to accept requests. Please try again!");
+                        sendMessageToClient("You don't have permission to accept requests.");
                         continue;
                     }
 
                     synchronized (requests) {
-                        for (Map.Entry<UUID, Request> set : requests.entrySet()) {
-                            if (set.getKey().toString().equals(commandArgs[1])) {
-                                if (set.getValue().getApproval().equals(this.user.getRole()) || this.user.getRole().equals(Role.General)) {
+                        for (Map.Entry<UUID, Request> entry : requests.entrySet()) {
+                            if (entry.getKey().toString().equals(commandArgs[1])) {
+                                if (entry.getValue().getApproval().equals(this.user.getRole()) || this.user.getRole().equals(Role.General)) {
                                     synchronized (lock) {
                                         requestsAccepted++;
                                     }
-                                    unicastMessage(set.getValue().getUser().getUsername(), "Your missile launch request to " + set.getValue().getLocation() + " with reason: " + set.getValue().getReason() + " has been accepted!");
-                                    broadcastMessage("Missile by " + set.getValue().getUser().getUsername() + " launched to " + set.getValue().getLocation() + " with reason: " + set.getValue().getReason());
-                                    Logger.log(getClientAddress(this.socket), "Accept", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " accepted request " + set.getKey() + ".");
+                                    unicastMessage(entry.getValue().getUser().getUsername(), "Your missile launch request to " + entry.getValue().getLocation() + " with reason: " + entry.getValue().getReason() + " has been accepted!");
+                                    broadcastMessage("Missile by " + entry.getValue().getUser().getUsername() + " launched to " + entry.getValue().getLocation() + " with reason: " + entry.getValue().getReason());
+                                    Logger.log(getClientAddress(this.socket), "Accept", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " accepted request " + entry.getKey() + ".");
                                 } else {
                                     sendMessageToClient("You don't have permission to accept this request. Please try again!");
                                 }
@@ -563,19 +568,19 @@ public class Server {
                     }
 
                     if (this.user.getRole().equals(Role.Private)) {
-                        sendMessageToClient("You don't have permission to reject requests. Please try again!");
+                        sendMessageToClient("You don't have permission to reject requests.");
                         continue;
                     }
 
                     synchronized (requests) {
-                        for (Map.Entry<UUID, Request> set : requests.entrySet()) {
-                            if (set.getKey().toString().equals(commandArgs[1])) {
-                                if (set.getValue().getApproval().equals(this.user.getRole()) || this.user.getRole().equals(Role.General)) {
+                        for (Map.Entry<UUID, Request> entry : requests.entrySet()) {
+                            if (entry.getKey().toString().equals(commandArgs[1])) {
+                                if (entry.getValue().getApproval().equals(this.user.getRole()) || this.user.getRole().equals(Role.General)) {
                                     synchronized (lock) {
                                         requestsRejected++;
                                     }
-                                    unicastMessage(set.getValue().getUser().getUsername(), "Your missile launch request to " + set.getValue().getLocation() + " with reason: " + set.getValue().getReason() + " has been rejected!");
-                                    Logger.log(getClientAddress(this.socket), "Reject", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " rejected request " + set.getKey() + ".");
+                                    unicastMessage(entry.getValue().getUser().getUsername(), "Your missile launch request to " + entry.getValue().getLocation() + " with reason: " + entry.getValue().getReason() + " has been rejected!");
+                                    Logger.log(getClientAddress(this.socket), "Reject", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " rejected request " + entry.getKey() + ".");
                                 } else {
                                     sendMessageToClient("You don't have permission to reject this request. Please try again!");
                                 }
@@ -584,7 +589,7 @@ public class Server {
                             }
                         }
                     }
-                } else if (command.startsWith("/promote")) {
+                } else if (command.startsWith("/promote") || command.startsWith("/demote")) {
                     String[] commandArgs = command.split("\\s+", 3);
 
                     if (isInvalidCommand(commandArgs.length, 3)) {
@@ -598,52 +603,45 @@ public class Server {
                     }
 
                     if (!this.user.getRole().equals(Role.General)) {
-                        sendMessageToClient("You don't have permission to promote. Please try again!");
+                        sendMessageToClient("You don't have permission to promote.");
                         continue;
                     }
 
                     synchronized (clients) {
-                        for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
-                            if (entry.getValue().getUsername().equals(commandArgs[1])) {
-                                entry.getValue().setRole(Role.valueOf(commandArgs[2]));
-                                Logger.log(getClientAddress(this.socket), "Promote", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " promoted user " + commandArgs[1] + " to " + commandArgs[2] + ".");
-                            } else {
-                                sendMessageToClient("The user doesn't exist. Please try again!");
+                        boolean userFound = false;
+
+                        for (ClientHandler client : clients) {
+                            if (client.user.getUsername().equals(commandArgs[1])) {
+                                client.user.setRole(Role.valueOf(commandArgs[2]));
+                                Logger.log(getClientAddress(this.socket), (command.startsWith("/promote") ? "Promote" : "Demote"), "User (" + this.user.getRole() + ")" + this.user.getUsername() + " " + (command.startsWith("/promote") ? "promoted" : "demoted") + " user " + commandArgs[1] + " to " + commandArgs[2] + ".");
+                                userFound = true;
+                                break;
                             }
                         }
-                    }
-                } else if (command.startsWith("/demote")) {
-                    String[] commandArgs = command.split("\\s+", 3);
 
-                    if (isInvalidCommand(commandArgs.length, 3)) {
-                        sendMessageToClient("Invalid command. Please try again!");
-                        continue;
-                    }
-
-                    if (isInvalidRole(commandArgs[2])) {
-                        sendMessageToClient("Invalid role. Please try again!");
-                        continue;
-                    }
-
-                    if (!this.user.getRole().equals(Role.General)) {
-                        sendMessageToClient("You don't have permission to demote. Please try again!");
-                        continue;
-                    }
-
-                    synchronized (clients) {
-                        for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
-                            if (entry.getValue().getUsername().equals(commandArgs[1])) {
-                                entry.getValue().setRole(Role.valueOf(commandArgs[2]));
-                                Logger.log(getClientAddress(this.socket), "Demote", "User (" + this.user.getRole() + ")" + this.user.getUsername() + " demoted user " + commandArgs[1] + " to " + commandArgs[2] + ".");
-                            } else {
-                                sendMessageToClient("The user doesn't exist. Please try again!");
-                            }
+                        if (!userFound) {
+                            sendMessageToClient("The user doesn't exist. Please try again!");
                         }
                     }
                 } else {
                     sendMessageToClient("Invalid command. Please try again!");
                 }
             }
+        }
+
+        /**
+         * Returns the next approval role based on the current user's role.
+         * The approval roles are assigned in a sequential hierarchy: Private -> Sergeant -> Lieutenant -> General.
+         *
+         * @return The next approval role or null if there is no next role (e.g., the current role is General).
+         */
+        private Role getApprovalRole() {
+            return switch (this.user.getRole()) {
+                case Private -> Role.Sergeant;
+                case Sergeant -> Role.Lieutenant;
+                case Lieutenant -> Role.General;
+                default -> null;
+            };
         }
 
         /**
@@ -701,15 +699,15 @@ public class Server {
             synchronized (clients) {
                 boolean userOnline = false;
 
-                for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
-                    if (entry.getValue().getUsername().equals(username)) {
+                for (ClientHandler client : clients) {
+                    if (client.user.getUsername().equals(username)) {
                         userOnline = true;
                         try {
-                            entry.getKey().bufferedWriter.write("[%s] [Say] (%s)%s: %s%n".formatted(getCurrentTime(), this.user.getRole(), this.user.getUsername(), message));
-                            entry.getKey().bufferedWriter.newLine();
-                            entry.getKey().bufferedWriter.flush();
+                            client.bufferedWriter.write("[%s] [Whisper] (%s)%s: %s%n".formatted(getCurrentTime(), this.user.getRole(), this.user.getUsername(), message));
+                            client.bufferedWriter.newLine();
+                            client.bufferedWriter.flush();
                         } catch (Exception e) {
-                            handleException("An unexpected error has occurred during broadcasting message!", e);
+                            handleException("An unexpected error has occurred during sending message to client!", e);
                         }
                     }
                 }
@@ -734,12 +732,12 @@ public class Server {
          */
         private void multicastMessage(Role role, String message) {
             synchronized (clients) {
-                for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
-                    if (entry.getValue().getRole().equals(role)) {
+                for (ClientHandler client : clients) {
+                    if (client.user.getRole().equals(role) && client != this) {
                         try {
-                            entry.getKey().bufferedWriter.write("[%s] [Rank %s] (%s)%s: %s%n".formatted(getCurrentTime(), role.toString(), this.user.getRole(), this.user.getUsername(), message));
-                            entry.getKey().bufferedWriter.newLine();
-                            entry.getKey().bufferedWriter.flush();
+                            client.bufferedWriter.write("[%s] [Rank %s] (%s)%s: %s%n".formatted(getCurrentTime(), role.toString(), this.user.getRole(), this.user.getUsername(), message));
+                            client.bufferedWriter.newLine();
+                            client.bufferedWriter.flush();
                         } catch (Exception e) {
                             handleException("An unexpected error has occurred during broadcasting message!", e);
                         }
@@ -755,12 +753,12 @@ public class Server {
          */
         private void broadcastMessage(String message) {
             synchronized (clients) {
-                for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
-                    if (entry.getKey() != this) {
+                for (ClientHandler client : clients) {
+                    if (client != this) {
                         try {
-                            entry.getKey().bufferedWriter.write("[%s] [All] (%s)%s: %s%n".formatted(getCurrentTime(), this.user.getRole(), this.user.getUsername(), message));
-                            entry.getKey().bufferedWriter.newLine();
-                            entry.getKey().bufferedWriter.flush();
+                            client.bufferedWriter.write("[%s] [All] (%s)%s: %s%n".formatted(getCurrentTime(), this.user.getRole(), this.user.getUsername(), message));
+                            client.bufferedWriter.newLine();
+                            client.bufferedWriter.flush();
                         } catch (Exception e) {
                             handleException("An unexpected error has occurred during broadcasting message!", e);
                         }
@@ -800,8 +798,13 @@ public class Server {
                 if (this.bufferedWriter != null) this.bufferedWriter.close();
                 if (this.bufferedReader != null) this.bufferedReader.close();
                 synchronized (rooms) {
-                    for (Map.Entry<String, List<ClientHandler>> set : rooms.entrySet()) {
-                        set.getValue().remove(this);
+                    for (Map.Entry<String, List<ClientHandler>> entry : rooms.entrySet()) {
+                        if (entry.getValue().contains(this)) {
+                            entry.getValue().remove(this);
+                            if (entry.getValue().isEmpty()) {
+                                rooms.remove(entry.getKey());
+                            }
+                        }
                     }
                 }
                 synchronized (clients) {
@@ -832,12 +835,12 @@ public class Server {
         @Override
         public void run() {
             synchronized (clients) {
-                for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
-                    if (entry.getValue() != null && entry.getValue().getRole().equals(Role.General)) {
+                for (ClientHandler client : clients) {
+                    if (client.user != null && client.user.getRole().equals(Role.General)) {
                         try {
-                            entry.getKey().bufferedWriter.write("[%s] [SERVER] Active users: %s%n".formatted(getCurrentTime(), clients.size()));
-                            entry.getKey().bufferedWriter.newLine();
-                            entry.getKey().bufferedWriter.flush();
+                            client.bufferedWriter.write("[%s] [SERVER] Active users: %s%n".formatted(getCurrentTime(), clients.size()));
+                            client.bufferedWriter.newLine();
+                            client.bufferedWriter.flush();
                         } catch (Exception e) {
                             System.err.println("An unexpected error has occurred during broadcasting message!\n" + e.getMessage());
                             System.exit(1);
@@ -865,11 +868,11 @@ public class Server {
         @Override
         public void run() {
             synchronized (clients) {
-                for (Map.Entry<ClientHandler, User> entry : clients.entrySet()) {
+                for (ClientHandler client : clients) {
                     try {
-                        entry.getKey().bufferedWriter.write("[%s] [SERVER] Requests pending: %s, Requests accepted: %s, Requests rejected: %s%n".formatted(getCurrentTime(), requests.size(), requestsAccepted, requestsRejected));
-                        entry.getKey().bufferedWriter.newLine();
-                        entry.getKey().bufferedWriter.flush();
+                        client.bufferedWriter.write("[%s] [SERVER] Requests pending: %s, Requests accepted: %s, Requests rejected: %s%n".formatted(getCurrentTime(), requests.size(), requestsAccepted, requestsRejected));
+                        client.bufferedWriter.newLine();
+                        client.bufferedWriter.flush();
                     } catch (Exception e) {
                         System.err.println("An unexpected error has occurred during broadcasting message!\n" + e.getMessage());
                         System.exit(1);
