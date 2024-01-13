@@ -1,0 +1,27 @@
+/sign-up g1 g1 g1 General
+/sign-up l1 l1 l1 Lieutenant
+/sign-up s1 s1 s1 Sergeant
+/sign-up p1 p1 p1 Private
+
+/whisper l1 Let's Meet!
+/say Private Hello Privates!
+/all Hello Everyone!
+
+/list-rooms
+/create-room meeting
+/room meeting Who's there?
+
+/join-room meeting
+/room meeting I'm here!
+
+/leave-room meeting
+/room meeting Why you here?
+
+/list-requests
+/launch-missile Porto Beautiful
+/launch-missile Lisbon Ugly
+
+/list-requests
+
+/accept-request {id}
+/reject-request {id}

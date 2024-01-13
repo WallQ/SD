@@ -521,6 +521,11 @@ public class Server {
                     }
 
                     synchronized (requests) {
+                        if (requests.isEmpty()) {
+                            sendMessageToClient("There are no requests available.");
+                            continue;
+                        }
+
                         for (Map.Entry<UUID, Request> entry : requests.entrySet()) {
                             if (entry.getValue().getApproval().equals(this.user.getRole()) || this.user.getRole().equals(Role.General)) {
                                 sendMessageToClient("[Available Requests]\nID: " + entry.getKey() + "\nUser: " + entry.getValue().getUser().getUsername() + "\nLocation: " + entry.getValue().getLocation() + "\nReason: " + entry.getValue().getReason());
