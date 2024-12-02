@@ -1,4 +1,4 @@
-# SD - Sistemas Distribuídos
+# SI - Sistemas de Informação
 
 ## Description
 
@@ -8,6 +8,6 @@
 
 ## License
 
-[MIT](https://github.com/WallQ/SD/blob/master/LICENSE)
+[MIT](https://github.com/WallQ/SI/blob/master/LICENSE)
 
 **ESTG - Escola Superior de Tecnologia e Gestão | Politécnico do Porto**
